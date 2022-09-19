@@ -1,4 +1,37 @@
-# noinspection PyUnresolvedReferences
 from solver import Fragment
 
-figures = []
+figures = [
+    Fragment((
+        (1, 0, 0),
+        (0, 1, 0),
+        (0, 1, 1),
+    ), 1),
+    Fragment((
+        (0, 1, 0),
+        (0, 1, 1),
+        (1, 1, 0),
+        (1, 2, 0),
+    ), 2),
+    Fragment((
+        (0, 1, 0),
+        (0, 2, 0),
+        (0, 1, 1),
+        (1, 1, 1),
+    ), 3),
+    Fragment((
+        (0, 0, 1),
+        (0, 1, 0),
+        (0, 2, 0),
+        (1, 1, 0),
+    ), 4),
+    Fragment((
+        (1, 0, 0),
+        (2, 0, 0),
+        (2, 0, 1),
+    ), 5),
+    Fragment((
+        (1, 0, 0),
+        (2, 0, 0),
+        (1, 0, 1),
+    ), 6),
+]

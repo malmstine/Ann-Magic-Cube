@@ -2,7 +2,8 @@ from __future__ import annotations
 import enum
 import math
 import typing as t
-from itertools import permutations, product, combinations_with_replacement
+from itertools import product, starmap
+from operator import sub, add
 
 from utils import ReadOnly
 
@@ -31,6 +32,12 @@ class Fragment:
     def __init__(self, coords, name):
         self._coords = coords
         self._name = name
+
+    def __hash__(self):
+        return self.name, hash(frozenset(self._coords))
+
+    def __eq__(self, other: Fragment):
+        return self.name == other.name and set(self._coords) == set(other._coords)
 
 
 def z_90_rotate(coord):
@@ -69,6 +76,7 @@ def axis_90_rotate(fragment: Fragment, axis: Axis) -> Fragment:
 def axis_rotate(fragment: Fragment, axis: Axis, count) -> Fragment:
     if count <= 0:
         return fragment
+    fragment = axis_90_rotate(fragment, axis)
     return axis_rotate(fragment, axis, count - 1)
 
 
@@ -80,7 +88,7 @@ def rotate(fragment: Fragment, rotates) -> Fragment:
 
 
 def generate_cube(size):
-    return (None, ) * size ** 3
+    return (0, ) * size ** 3
 
 
 class Cube2dSlice:
@@ -95,6 +103,14 @@ class Cube2dSlice:
     def __getitem__(self, item):
         size = self._size
         return self._cube[size * item: size * item + size]
+
+    def __iter__(self):
+        for s in range(self._size):
+            yield self[s]
+
+
+class CubeAddError(Exception):
+    pass
 
 
 class Cube:
@@ -112,10 +128,44 @@ class Cube:
 
     def get_cube_coord(self, x, y, z):
         size = self._size
-        return size ** 2 * x + size * y + z
+        return size ** 2 * z + size * y + x
+
+    def get_coords(self, cell):
+        base = self._size
+        digits = []
+        while cell:
+            digits.append(cell % base)
+            cell = cell // base
+        digits += [0] * base
+        return digits[:3]
+
+    @property
+    def catsisland(self):
+        return enumerate(self._cube)
 
     def __str__(self):
         pass
+
+    def __iter__(self):
+        for s in range(self._size):
+            yield self[s]
+
+    def __hash__(self):
+        return hash(self._cube)
+
+    def __eq__(self, other):
+        return self._cube == self._cube
+
+    def __add__(self, other: Cube):
+        if self._size != other._size:
+            raise CubeAddError
+
+        new_cells = []
+        for sc, oc in zip(self._cube, other._cube):
+            if sc and oc:
+                raise CubeAddError
+            new_cells.append(sc or oc)
+        return Cube(tuple(new_cells))
 
 
 class AddFragmentError(Exception):
@@ -125,10 +175,12 @@ class AddFragmentError(Exception):
 def add_fragment(cube: Cube, figure: Fragment, positions) -> Cube:
 
     cube_coords = []
-    for coords in figure.coords:
+    for coords in figure.coords + ((0, 0, 0), ):
         x, y, z = map(sum, zip(coords, positions))
         cb = cube.get_cube_coord(x, y, z)
         cube_coords.append(cb)
+        if min(x, y, z) < 0:
+            raise AddFragmentError
         try:
             target = cube[x][y][z]
             if target:
@@ -139,15 +191,6 @@ def add_fragment(cube: Cube, figure: Fragment, positions) -> Cube:
     return Cube(tuple(
         c if i not in cube_coords else figure.name for i, c in enumerate(cube.cube)
     ))
-
-
-class Assembly:
-    def __init__(self, positions, rotates):
-        self.positions = positions
-        self.rotates = rotates
-
-
-Assemblies = t.List[Assembly]
 
 
 def get_pos_(raw_pos, size):
@@ -162,9 +205,94 @@ def get_rotations():
     return product(rotations, rotations, rotations)
 
 
-def generate_assembly(fragment_count, size) -> t.List[Assemblies]:
-    get_rotations_ = list(get_rotations())
-    all_positions = tuple(range(size ** 3))
-    for pos in permutations(all_positions, fragment_count):
-        for rots in combinations_with_replacement(get_rotations_, fragment_count):
-            yield (Assembly(get_pos_(res_pos, size), res_rot) for res_pos, res_rot in zip(pos, rots))
+def get_figure(cube, cells, name) -> Fragment:
+    coords = []
+    for c in cells:
+        coords.append(cube.get_coords(c))
+
+    first, *others = coords
+    x, y, z = first
+    return Fragment(
+        name=name,
+        coords=tuple(
+            (xx - x, yy - y, zz - z) for xx, yy, zz in others
+        )
+    )
+
+
+def get_free_cells(cube: Cube) -> t.List:
+    for cell_num, cell in cube.catsisland:
+        if not cell:
+            yield cell_num
+
+
+def compare(normalized: Fragment, figure: Fragment) -> bool:
+    for rotates in product(range(4), repeat=3):
+        rotated = rotate(figure, rotates)
+        rotated_coords = tuple(sorted(rotated.coords + ((0, 0, 0), )))
+        base_coords = tuple(sorted(normalized.coords + ((0, 0, 0), )))
+        dx, dy, dz = starmap(sub, zip(base_coords[0], rotated_coords[0]))
+        rotated_coords = tuple(
+            (x + dx, y + dy, z + dz) for x, y, z in rotated_coords
+        )
+        if rotated_coords == base_coords:
+            return True
+    return False
+
+
+def get_all_rotates():
+    return product(range(4), repeat=3)
+
+
+def get_all_cubes(cube: Cube, figure: Fragment):
+    for cell_number, cell in cube.catsisland:
+        coords = cube.get_coords(cell_number)
+        try:
+            yield add_fragment(cube, figure, coords)
+        except AddFragmentError:
+            pass
+
+
+def mod(num):
+    return -num if num < 0 else num
+
+
+class CubeRotationException(Exception):
+    pass
+
+
+def cube_rotation(cube: Cube, rotations):
+    try:
+        [fragment_name] = set(c for c in cube.cube if c)
+    except ValueError:
+        raise CubeRotationException
+
+    sw = (cube.size, cube.size, cube.size)
+    # noinspection PyTypeChecker
+    fragment = Fragment(
+        coords=tuple(
+            cube.get_coords(cell_num) for cell_num, cell in cube.catsisland if cell
+        ) + (sw, ),
+        name=None
+    )
+
+    size = cube.size - 1
+    fragment = rotate(fragment, rotations)
+    [new_sw] = (coord for coord in fragment.coords if tuple(map(mod, coord)) == sw)
+    delta = [size if s < 0 else 0 for s in new_sw]
+
+    cube_coords = tuple(
+        cube.get_cube_coord(*starmap(add, zip(delta, coord)))
+        for coord in fragment.coords if tuple(map(mod, coord)) != sw
+    )
+
+    return Cube(tuple(
+        fragment_name if i in cube_coords else 0 for i, c in enumerate(cube.cube)
+    ))
+
+
+def print_c(c):
+    for plot in c:
+        for row in plot:
+            print(*row, sep='  ')
+        print("")
