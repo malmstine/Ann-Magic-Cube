@@ -7,9 +7,18 @@ from operator import mul
 from enum import Enum, auto
 from solver import (
     Cube, rotate, generate_cube, CubeAddError,
-    get_all_cubes, get_all_rotates, cube_rotation, print_c
+    get_all_cubes, get_all_rotates, cube_rotation, print_c, Fragment
 )
 from data import figures as figures_
+
+
+def to_fragment(name, fragment_coords):
+    base, *others = fragment_coords
+    mx, my, mz = base
+    return Fragment(
+        name=name,
+        coords=tuple((x - mx, y - my, z - mz) for x, y, z in others)
+    )
 
 
 class MsgTypes(Enum):
@@ -29,11 +38,10 @@ class Msg:
         return iter((self.type, self.payload))
 
 
-def calculate(figures, consumer):
+def calculate(figures):
 
     def send(msg_type, msg):
-        msg = Msg(msg_type, msg)
-        consumer(msg)
+        return Msg(msg_type, msg)
 
     base, *others = figures
 
@@ -68,35 +76,38 @@ def calculate(figures, consumer):
     all_solutions = reduce(mul, counts)
     sols_c = [reduce(mul, counts[cp:]) for cp in range(len(counts))]
 
-    send(MsgTypes.VARIANTS, all_solutions)
+    yield send(MsgTypes.VARIANTS, all_solutions)
 
     tasks = [(e_cube, cube, 0) for cube in cubes_set[0]]
     while tasks:
         cube, new_cube, pos = tasks.pop()
-
         try:
             pos += 1
             cube = cube + new_cube
-            time.sleep(0.001)
             if pos == len(figures):
-                send(MsgTypes.FOUNDED, cube)
+                yield send(MsgTypes.FOUNDED, cube)
                 count += 1
                 continue
             tasks.extend((cube, new_cube, pos) for new_cube in cubes_set[pos])
-            send(MsgTypes.PROGRESS, count)
+            yield send(MsgTypes.PROGRESS, count)
         except CubeAddError:
             count += sols_c[pos]
 
-    send(MsgTypes.PROGRESS, count)
-    send(MsgTypes.TOTAL, time.time() - common_time)
-    send(MsgTypes.END, None)
+    yield send(MsgTypes.PROGRESS, count)
+    yield send(MsgTypes.TOTAL, time.time() - common_time)
+    yield send(MsgTypes.END, None)
 
 
-def consumer_():
+colors = [
+    "#fcb33d", "#ffe7bf", "#fadaa4", "#ffd58f", "#fac670", "#ffbd52",
+]
+colors = colors * 10
+
+
+def consumer_(gen):
     count_variants = None
     results = []
-    while True:
-        msgtype, value = yield
+    for msgtype, value in gen:
         match msgtype:
             case MsgTypes.VARIANTS:
                 count_variants = value
@@ -126,9 +137,9 @@ def consumer_():
 
 def main():
     try:
-        cons = consumer_()
-        next(cons)
-        calculate(figures_, cons.send)
+        consumer_(
+            calculate(figures_)
+        )
     except StopIteration:
         pass
 
