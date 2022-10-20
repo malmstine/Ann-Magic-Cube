@@ -27,30 +27,45 @@ async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
 
     async def consumer(gen):
+        count_variants = None
+        last_progress = 0
         for msgtype, value in gen:
             match msgtype:
                 case MsgTypes.VARIANTS:
-                    await websocket.send_text(f'Всего вариантов: {value}')
+                    count_variants = value
+                    await websocket.send_json({
+                        "variants": value
+                    })
                     continue
 
                 case MsgTypes.PROGRESS:
+                    progress = int(value / count_variants * 100)
+                    if progress != last_progress:
+                        await websocket.send_json({
+                            "progress": progress
+                        })
+                        last_progress = progress
+                        await websocket.receive()
                     continue
 
                 case MsgTypes.FOUNDED:
                     res_data = serialize_cube(value)
-                    await websocket.send_text(json.dumps(res_data))
+                    await websocket.send_json({
+                        "result": res_data
+                    })
                     continue
 
                 case MsgTypes.TOTAL:
-                    await websocket.send_text(f'Время: {value:.3} sec')
+                    await websocket.send_json({
+                        "time": value
+                    })
                     continue
 
                 case MsgTypes.END:
                     return
 
     while True:
-        data = await websocket.receive_text()
-        data = json.loads(data)
+        data = await websocket.receive_json()
 
         try:
             figures = starmap(to_fragment, enumerate(data, start=1))
